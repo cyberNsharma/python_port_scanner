@@ -25,5 +25,3 @@ The project demonstrates fundamental concepts of **networking, socket programmin
 - Basic Networking Concepts
 
 ---
-
-## 📂 Project Structure
