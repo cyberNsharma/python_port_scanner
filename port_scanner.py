@@ -1,75 +1,97 @@
 import socket
 import threading
+import queue
 from datetime import datetime
 
+MAX_THREADS = 100
+TIMEOUT = 1.5
+
 print("===================================")
-print("        Simple TCP Port Scanner    ")
+print("        Port Scanner    ")
 print("===================================")
 
-# input
-target = input("Enter Target IP or Host: ")
+# Input
+target = input("Enter Target IP or Host: ").strip()
 start_port = int(input("Enter Start Port: "))
 end_port = int(input("Enter End Port: "))
 
-# resolve hostname
-# computers communicate using ip , not domain names
+# Resolve hostname
 try:
     target_ip = socket.gethostbyname(target)
 except socket.gaierror:
     print("Hostname could not be resolved")
     exit()
 
-print("\nScanning Target:", target_ip)
-print("Scanning ports:", start_port, "to", end_port)
-print("Scan started at:", datetime.now())
+print(f"\nScanning Target: {target_ip}")
+print(f"Ports: {start_port} to {end_port}")
+print(f"Scan started at: {datetime.now()}")
 print("-----------------------------------")
 
+# Queue & shared data
+task_queue = queue.Queue()
+results = {}
+lock = threading.Lock()
 
-# scan function
-def scan_port(port):
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
+# Worker function
+def worker():
+    while True:
+        port = task_queue.get()
+        if port is None:
+            break
 
-        result = sock.connect_ex((target_ip, port))
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
 
-        if result == 0:
-            message = f"Port {port} OPEN"
-            print(message)
-            
+            result = sock.connect_ex((target_ip, port))
 
-        else:
-            message = f"Port {port} CLOSED"
-            print(message)
-            
+            if result == 0:
+                status = "OPEN"
+            elif result in (111, 61, 10061):
+                status = "CLOSED"
+            else:
+                status = "FILTERED"
 
-        sock.close()
+        except socket.timeout:
+            status = "TIMEOUT"
+        except socket.error:
+            status = "ERROR"
+        finally:
+            sock.close()
 
-    except socket.timeout:
-        message = f"Port {port} TIMEOUT"
-        print(message)
-       
+        with lock:
+            results[port] = status
+            print(f"Port {port:<5} {status}")
 
-    except socket.error:
-        message = f"Port {port} ERROR"
-        print(message)
-        
+        task_queue.task_done()
 
 
+# Create thread pool
 threads = []
+thread_count = min(MAX_THREADS, end_port - start_port + 1)
 
-# create threads for scanning 
- # Thread runs port scanning tasks in parallel instead of one by one.
-for port in range(start_port, end_port + 1):
-    t = threading.Thread(target=scan_port, args=(port,))
-    threads.append(t)
+for _ in range(thread_count):
+    t = threading.Thread(target=worker, daemon=True)
     t.start()
+    threads.append(t)
 
-# wait for all threads to finish
+# Add tasks
+for port in range(start_port, end_port + 1):
+    task_queue.put(port)
+
+# Wait for completion
+task_queue.join()
+
+# Stop threads
+for _ in threads:
+    task_queue.put(None)
+
 for t in threads:
     t.join()
 
+# Summary
 print("-----------------------------------")
-print("Scan completed at:", datetime.now())
+print(f"Scan completed at: {datetime.now()}")
 
-
+open_ports = [p for p, s in results.items() if s == "OPEN"]
+print("OPEN ports:", open_ports if open_ports else "None")
